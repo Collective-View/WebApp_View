@@ -37,7 +37,7 @@ Para garantizar la descarga en todos los navegadores móviles, el sistema almace
 nombre del archivo.
 
 Los datos de la inspección se codifican en el nombe, separados por el doble guion bajo(__):
-$`Sargazo_[Nivel]__Lat_[Latitud]__Lon_[Longitud]__QR_[Estado]__Time_[Timestamp]__ID_[Único].jpg`$
+$Sargazo_[Nivel]__Lat_[Latitud]__Lon_[Longitud]__QR_[Estado]__Time_[Timestamp]__ID_[Único].jpg$
 
 |Dato codificado | Fuente de la información | Utilidad |
 | :--- | :--- | :--- |
