@@ -1,74 +1,32 @@
-// app/_layout.js
-import { Stack, router, useSegments } from "expo-router";
-import { onAuthStateChanged } from 'firebase/auth';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
-import { auth } from '../firebaseConfig';
+// app/_layout.js 
 
-// Hook para verificar y proteger las rutas
-function useProtectedRoute(user) {
-  const segments = useSegments();
-  // El segmento [0] es la raíz. La ruta de autenticación es 'index'
-  const isAuthRoute = segments[0] === 'index'; 
+/**
+ * @fileoverview Configuración de la estructura de navegación global (Stack) para la app.
+ * Este archivo define la jerarquia de la aplicación web utilizando Expo Router.
+ * Nota: Por el momento esta aplicación utiliza a Firebase para el alojamiento (Hosting), vendran actualizaciones donde 
+ * tendra logica de autenticación. 
+ * 
+ */
 
-  useEffect(() => {
-    // Si el usuario NO existe Y NO estamos en la página de login, redirigir a login
-    if (!user && !isAuthRoute) {
-      router.replace("/"); // Redirige a app/index.js (Login)
-    } 
-    // Si el usuario SÍ existe Y está en la página de login, redirigir a Portada
-    else if (user && isAuthRoute) {
-      router.replace("/portada"); // Redirige a app/portada.js
-    }
-  }, [user, segments]);
-}
+import { Stack } from "expo-router";
 
+/**
+ * @function RootLayout
+ * @description Define el contenedor de navegación de pila (Stack Navigator) de la aplicación.
+ * @returns {JSX.Element} El contenedor de navegación.
+ */
 export default function RootLayout() {
-  const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  // Escucha el estado de autenticación de Firebase
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
-        setUser(currentUser);
-        setIsLoading(false); // La aplicación está lista una vez que se verifica el usuario
-    });
-    return () => unsub();
-  }, []);
-
-  // Ejecuta la lógica de protección de ruta
-  useProtectedRoute(user);
-
-  if (isLoading) {
-    // Muestra una pantalla de carga mientras se verifica el token de Firebase
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#2c3e50' }}>
-        <ActivityIndicator size="large" color="#3498db" />
-      </View>
-    );
-  }
 
   return (
     <Stack>
-      {/* 1. Pantalla de Login (app/index.js) */}
-      <Stack.Screen 
-          name="index" 
-          options={{ headerShown: false }} 
-      /> 
+      {/* index.js (Pantalla de bienvenida con el logo) */}
+      <Stack.Screen name="index" options={{ headerShown: false }} /> 
       
-      {/* 2. Pantalla de Portada/Menú (app/portada.js) */}
-      <Stack.Screen 
-          name="portada" 
-          options={{ headerShown: false }} 
-      />
-
-      {/* 3. Pantalla de la Cámara (app/camera.js) */}
-      <Stack.Screen 
-          name="camera" 
-          options={{ 
-              title: 'Vista de Inspección',
-          }} 
-      /> 
+      {/* portada.js (Menú/Dashboard simplificado) */}
+      <Stack.Screen name="portada" options={{ headerShown: false }} />
+      
+      {/* camera.js (Funcionalidad principal: Toma de fotos con metadatos EXIF) */}
+      <Stack.Screen name="camera" options={{ headerShown: false}} /> 
     </Stack>
   );
 }

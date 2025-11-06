@@ -1,15 +1,12 @@
 {
   "hosting": {
-    // 1. CORRECCIÓN DEL DIRECTORIO DE COMPILACIÓN DE EXPO
-    "public": "web-build", 
-
+    "public": "dist", 
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**" 
     ],
     
-    // 2. CORRECCIÓN DEL ROUTING (NECESARIO PARA EXPO ROUTER/SPA)
     "rewrites": [
       {
         "source": "**",

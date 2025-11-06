@@ -1,11 +1,16 @@
 // firebaseConfig.js
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
 
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+/**
+ * @fileoverview Configuración base de Firebase para la aplicación.
+ * * NOTA IMPORTANTE:
+ * La aplicación ahora funciona en "Modo Local" (guardado de fotos en el dispositivo).
+
+ */
+
+
+import { initializeApp } from 'firebase/app';
+
+// Claves y dominios
 const firebaseConfig = {
   apiKey: "TU_API_KEY_AQUÍ",
   authDomain: "TU_AUTH_DOMAIN_AQUÍ",
@@ -16,14 +21,9 @@ const firebaseConfig = {
   measurementId: "TU_MEASUREMENT_ID_AQUÍ"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+/**
+ * @constant {object} app
+ * La instancia central de la aplicación de Firebase. Solo se usa para el hosting.
+ */
+export const app = initializeApp(firebaseConfig);
 
-
-// Servicios que usaremos en la aplicación
-// 1.- Auth: Autenticación de usuarios
-export const auth = getAuth(app);
-// 2.- Firestore: Base de datos para los metadatos 
-export const db = getFirestore(app);
-// 3.- Storage: ALmacenamiento de las imagenes
-export const storage = getStorage(app);

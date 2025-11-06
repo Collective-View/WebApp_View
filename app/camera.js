@@ -1,441 +1,318 @@
+// app/camera.js
+
+/**
+ * @fileoverview Cámara principal
+ * Incluye: Permisos condicionales web, Lógica de Sensores.
+ */
+
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
-import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { DeviceMotion } from 'expo-sensors';
 import { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator // Añadido para el estado de carga
-    ,
-
+    ActivityIndicator,
     Alert,
     Animated,
     Dimensions,
-    Image,
+    Platform,
     StyleSheet,
     Text,
     TouchableOpacity,
     View
 } from 'react-native';
+import SargassumQuestion from './SargassumQuestion';
 
-// --- IMPORTACIONES DE FIREBASE ---
-import { addDoc, collection } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { auth, db, storage } from '../firebaseConfig.js'; // Asegúrate que la ruta sea correcta
-// ----------------------------------
-
-// --- CÁLCULOS DE DIMENSIONES Y REGIÓN DE INTERÉS (ROI) ---
-const { width: initialScreenWidth, height: initialScreenHeight } = Dimensions.get('window'); 
-const FRAME_WIDTH_PERCENT = 0.50; 
-const FRAME_HEIGHT_PERCENT = 0.20; 
-
-const getDimensions = () => {
-    const { width, height } = Dimensions.get('window');
-    return { width, height };
-};
-
-const INITIAL_ORIENTATION = initialScreenWidth < initialScreenHeight ? 'PORTRAIT' : 'LANDSCAPE';
+// --- CONSTANTES Y UTILS ---
+const FRAME_SIZE_PX = 150; 
+const getDimensions = () => Dimensions.get('window');
+// -------------------------------------------------------------------
+// === Componente principal ===
+// -------------------------------------------------------------------
 
 export default function CameraScreen() {
-    // Permisos y Estados
-    const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-    const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
+    
+    // === Estabilidad web: Permisos y estados básicos ===
+    const isWeb = Platform.OS === 'web';
+    const [cameraPermission, requestCameraPermission] = 
+        isWeb 
+        ? [{ granted: true, status: 'granted' }, () => {}] 
+        : useCameraPermissions();
+
     const [locationStatus, setLocationStatus] = useState(null); 
+    const [isCameraReady, setIsCameraReady] = useState(false); 
 
     const cameraRef = useRef(null);
-    const [photoUri, setPhotoUri] = useState(null);
+    const [photoUri, setPhotoUri] = useState(null); 
     const [isCameraActive, setIsCameraActive] = useState(true);
     const [metadata, setMetadata] = useState(null); 
-    const [dimensions, setDimensions] = useState(getDimensions());
-    const { width: currentScreenWidth, height: currentScreenHeight } = dimensions; 
-    const [orientation, setOrientation] = useState(INITIAL_ORIENTATION); 
-
+    const [dimensions] = useState(getDimensions());
+    const [cameraKey, setCameraKey] = useState(0);
+    
+    // Sensores y control
     const [pitch, setPitch] = useState(0); 
     const [roll, setRoll] = useState(0);   
-    const [isLeveled, setIsLeveled] = useState(false);
-    const [isTilted, setIsTilted] = useState(false);
-    const [hasVibrated, setHasVibrated] = useState(false);
+    const [isLeveled, setIsLeveled] = useState(false); 
+    const [isTilted, setIsTilted] = useState(false); 
     const [isQrDetected, setIsQrDetected] = useState(false); 
-    const [isUploading, setIsUploading] = useState(false); // Estado de carga de Firebase
 
-    const [pitchDeviation, setPitchDeviation] = useState(0); 
+    // Animaciones
     const animatedRoll = useRef(new Animated.Value(0)).current; 
     const animatedOpacity = useRef(new Animated.Value(1)).current; 
     const animatedPitch = useRef(new Animated.Value(0)).current; 
     const animatedPitchOpacity = useRef(new Animated.Value(1)).current;
 
 // ----------------------------------------------------------------------
-// 0. FUNCIONES DE LÓGICA Y NAVEGACIÓN
+// === 0. Funciones de flujo y QR ===
 // ----------------------------------------------------------------------
     const goToMainScreen = () => { router.back(); };
     
     const resetCameraView = () => {
-        setPhotoUri(null); setMetadata(null); setIsQrDetected(false); 
-        setIsUploading(false); setIsCameraActive(true);
-    };
+        setPhotoUri(null); 
+        setIsCameraActive(true); 
+        setMetadata(null);
 
-    // Recalcular ROI cuando cambian las dimensiones
-    const roiConfigRef = useRef({ xStart: 0, xEnd: 0, yStart: 0, yEnd: 0 });
-    useEffect(() => {
-        const frameW = currentScreenWidth * FRAME_WIDTH_PERCENT;
-        const frameH = currentScreenHeight * FRAME_HEIGHT_PERCENT;
-        roiConfigRef.current = {
-            xStart: (currentScreenWidth / 2) - (frameW / 2),
-            xEnd: (currentScreenWidth / 2) + (frameW / 2),
-            yStart: (currentScreenHeight / 2) - (frameH / 2),
-            yEnd: (currentScreenHeight / 2) + (frameH / 2),
-        };
-    }, [currentScreenWidth, currentScreenHeight]);
+        setPitch(0); 
+        setRoll(0);
+        setIsLeveled(false); 
+        setIsTilted(false);
+
+        setCameraKey(prevKey => prevKey + 1); 
+
+    };
 
     const handleBarcodeScanned = ({ bounds }) => {
-        if (!isCameraActive) return; 
-
-        const { xStart, xEnd, yStart, yEnd } = roiConfigRef.current;
+        const { width: currentScreenWidth, height: currentScreenHeight } = dimensions; 
+        if (!bounds || !isCameraActive) return;
+        const xCenter = currentScreenWidth / 2;
+        const yCenter = currentScreenHeight / 2;
+        const xStart = xCenter - FRAME_SIZE_PX / 2; 
+        const xEnd = xCenter + FRAME_SIZE_PX / 2;
+        const yStart = yCenter - FRAME_SIZE_PX / 2; 
+        const yEnd = yCenter + FRAME_SIZE_PX / 2;
         
-        const centerX = bounds.origin.x + (bounds.size.width / 2);
-        const centerY = bounds.origin.y + (bounds.size.height / 2);
-
-        const isInsideROI = 
-            centerX >= xStart && centerX <= xEnd &&
-            centerY >= yStart && centerY <= yEnd;
-        
-        setIsQrDetected(isInsideROI);
+        const qrCenter = { x: bounds.origin.x + bounds.size.width / 2, y: bounds.origin.y + bounds.size.height / 2 };
+        const isWithinRoi = (qrCenter.x >= xStart && qrCenter.x <= xEnd && qrCenter.y >= yStart && qrCenter.y <= yEnd);
+        setIsQrDetected(isWithinRoi);
     };
 
+
 // ----------------------------------------------------------------------
-// 1. GESTIÓN DE PERMISOS (Corregido)
+// === 1. Permisos y ubicación ===
 // ----------------------------------------------------------------------
+    
     useEffect(() => {
-        const dimensionsSubscription = Dimensions.addEventListener('change', ({ window }) => {
-            setDimensions(window);
-        });
-        
-        (async () => {
-            if (!cameraPermission?.granted) await requestCameraPermission();
-            if (!mediaPermission?.granted) await requestMediaPermission(); 
-        })();
-
-        (async () => {
-            let { status } = await Location.getForegroundPermissionsAsync();
-            if (status !== 'granted') {
-                const permissionResponse = await Location.requestForegroundPermissionsAsync();
-                status = permissionResponse.status;
-            }
-            setLocationStatus(status);
-        })();
-
-        return () => dimensionsSubscription.remove();
-    }, [cameraPermission, mediaPermission]); 
-
-// ----------------------------------------------------------------------
-// 2. SENSOR DE INCLINACIÓN Y ANIMACIÓN (Sin cambios)
-// ----------------------------------------------------------------------
-    useEffect(() => {
-        const sub = DeviceMotion.addListener((data) => {
-            if (!data || !data.rotation) return;
-
-            let { beta, gamma } = data.rotation;
-            beta = (beta * 180) / Math.PI;
-            gamma = (gamma * 180) / Math.PI;
-
-            const absGamma = Math.abs(gamma);
-            if (orientation === 'PORTRAIT' && absGamma > 75) { setOrientation('LANDSCAPE'); } 
-            else if (orientation === 'LANDSCAPE' && absGamma < 15) { setOrientation('PORTRAIT'); }
-            
-            let correctedPitch, correctedRoll;
-            if (orientation === 'PORTRAIT') { correctedPitch = beta; correctedRoll = gamma; } 
-            else { correctedRoll = -beta; correctedPitch = -gamma; }
-
-            setPitch(correctedPitch);
-            setRoll(correctedRoll);
-
-            Animated.spring(animatedRoll, { toValue: correctedRoll, useNativeDriver: true, speed: 5, bounciness: 0, }).start();
-            
-            const leveled = Math.abs(correctedRoll) <= 3;
-            const tilted = Math.abs(correctedPitch) >= 65 && Math.abs(correctedPitch) <= 75;
-
-            const currentPitchDeviation = correctedPitch - 70;
-            setPitchDeviation(currentPitchDeviation); 
-
-            Animated.spring(animatedPitch, { toValue: currentPitchDeviation, useNativeDriver: true, speed: 10, bounciness: 0, }).start();
-            
-            if (tilted) { Animated.timing(animatedPitchOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(); } 
-            else { Animated.timing(animatedPitchOpacity, { toValue: 1, duration: 100, useNativeDriver: true }).start(); }
-
-            setIsLeveled(leveled);
-            setIsTilted(tilted);
-            
-            if (!leveled || !tilted) { setHasVibrated(false); if (isQrDetected) { setIsQrDetected(false); }}
-            if (leveled) { Animated.timing(animatedOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(); } 
-            else { Animated.timing(animatedOpacity, { toValue: 1, duration: 100, useNativeDriver: true }).start(); }
-
-            if (leveled && tilted && !hasVibrated) { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); setHasVibrated(true); }
-        });
-
-        DeviceMotion.setUpdateInterval(200);
-        return () => sub.remove();
-    }, [hasVibrated, orientation, isQrDetected]); 
-
-// ----------------------------------------------------------------------
-// 3. FUNCIÓN CLAVE: GUARDAR EN FIREBASE (Firestore y Storage)
-// ----------------------------------------------------------------------
-    const handleSaveAndUpload = async (sargassumAnswer) => {
-        if (!photoUri || !metadata) return;
-
-        const user = auth.currentUser;
-        if (!user) {
-            Alert.alert("Error de Sesión", "Debe iniciar sesión para subir datos.");
-            return;
+        if (!cameraPermission?.granted) requestCameraPermission();
+    
+        if (Platform.OS !== 'web') {
+            (async () => {
+                let { status } = await Location.requestForegroundPermissionsAsync();
+                setLocationStatus(status);
+            })();
+        } else {
+            setLocationStatus('granted'); 
         }
+    }, [cameraPermission]);
+    
+// ----------------------------------------------------------------------
+// === 2. Sensor de inclinación y nivelación ===
+// ----------------------------------------------------------------------
+    
+    const processSensorData = (beta, gamma) => {
+        beta = beta || 0; gamma = gamma || 0;
+        const useNativeDriver = Platform.OS !== 'web';
+        const currentOrientation = Math.abs(gamma) > 45 ? 'LANDSCAPE' : 'PORTRAIT';
+        let correctedPitch = beta; let correctedRoll = gamma; 
+        if (currentOrientation === 'LANDSCAPE') { correctedRoll = -beta; correctedPitch = -gamma; }
+        setPitch(correctedPitch); setRoll(correctedRoll);
 
-        setIsUploading(true); 
-        const userId = user.uid;
-        const filename = `${new Date().getTime()}_${userId}.jpg`;
+        const uiRollThreshold = 4; const pitchMin = 60; const pitchMax = 70; const targetPitch = 65;
+        const leveled = Math.abs(correctedRoll) <= uiRollThreshold;
+        const tilted = Math.abs(correctedPitch) >= pitchMin && Math.abs(correctedPitch) <= pitchMax;
+        
+        const currentPitchDeviation = correctedPitch - targetPitch;
 
-        try {
-            // 1. SUBIR IMAGEN A FIREBASE STORAGE
-            const response = await fetch(photoUri);
-            const blob = await response.blob();
-            const storageRef = ref(storage, `inspecciones/${userId}/${filename}`);
-            
-            await uploadBytes(storageRef, blob);
-            const downloadURL = await getDownloadURL(storageRef);
-
-            // 2. PREPARAR Y GUARDAR METADATOS EN FIRESTORE
-            const dataToSave = {
-                userId: userId,
-                userEmail: user.email,
-                sargazoDetectado: sargassumAnswer,
-                imageUrl: downloadURL,
-                focalLength: metadata.focalLength,
-                latitude: metadata.location.latitude,
-                longitude: metadata.location.longitude,
-                timestamp: metadata.timestamp,
-                qrScanned: "Sí", // Se asume que el QR fue escaneado, ya que el botón estaba activo.
-            };
-
-            await addDoc(collection(db, "inspecciones"), dataToSave);
-            
-            Alert.alert('Éxito', 'Inspección guardada y subida a la nube.');
-            resetCameraView();
-
-        } catch (error) {
-            console.error("Error al guardar en Firebase:", error);
-            Alert.alert('Error de Subida', `No se pudieron guardar los datos: ${error.message}`);
-        } finally {
-            setIsUploading(false);
+        Animated.spring(animatedRoll, { toValue: correctedRoll, useNativeDriver, speed: 5, bounciness: 0, }).start();
+        Animated.timing(animatedOpacity, { toValue: 1, duration: 100, useNativeDriver: Platform.OS !== 'web' }).start(); 
+        Animated.spring(animatedPitch, { toValue: currentPitchDeviation, useNativeDriver, speed: 10, bounciness: 0, }).start();
+        if (tilted) { Animated.timing(animatedPitchOpacity, { toValue: 0, duration: 300, useNativeDriver }).start(); } 
+        else { Animated.timing(animatedPitchOpacity, { toValue: 1, duration: 100, useNativeDriver }).start(); }
+        
+        setIsLeveled(leveled); setIsTilted(tilted);
+        
+        if (!leveled || !tilted) { setHasVibrated(false); }
+        
+        if (useNativeDriver && leveled && tilted && !hasVibrated) { 
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
+            setHasVibrated(true); 
         }
     };
     
-// ----------------------------------------------------------------------
-// 4. CAPTURAR FOTO (Llama a la vista de Pregunta)
-// ----------------------------------------------------------------------
-    const takePhoto = async () => {
-        if (!cameraRef.current) return;
-        
-        const isReadyToCapture = isLeveled && isTilted && isQrDetected;
+    useEffect(() => {
+        if (!isCameraActive) return; 
 
-        if (!isReadyToCapture) {
-            if (!isLeveled) return Alert.alert('Captura Fallida', 'El teléfono debe estar nivelado (Roll ≈ 0°).');
-            if (!isTilted) return Alert.alert('Captura Fallida', 'El teléfono debe estar inclinado (Pitch 65°-75°).');
-            if (!isQrDetected) return Alert.alert('Captura Fallida', 'El código QR debe estar visible dentro del cuadro de referencia.');
-            return; 
+        if (Platform.OS !== 'web') {
+            DeviceMotion.setUpdateInterval(200);
+            const sub = DeviceMotion.addListener((data) => {
+                if (!data || !data.rotation) return;
+                let { beta, gamma } = data.rotation;
+                beta = (beta * 180) / Math.PI;
+                gamma = (gamma * 180) / Math.PI;
+                processSensorData(beta, gamma);
+            });
+            return () => sub.remove();
+        } else {
+            const handleWebOrientation = (event) => { 
+                if (event.beta !== null && event.gamma !== null) {
+                    processSensorData(event.beta, event.gamma); 
+                }
+            };
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().then(permissionState => {
+                    if (permissionState === 'granted') { window.addEventListener('deviceorientation', handleWebOrientation); }
+                }).catch(() => { window.addEventListener('deviceorientation', handleWebOrientation); });
+            } else { window.addEventListener('deviceorientation', handleWebOrientation); }
+            
+            return () => window.removeEventListener('deviceorientation', handleWebOrientation);
         }
-        
-        let tempMetadata = { 
-            location: { latitude: 'No disponible', longitude: 'No disponible' }, 
-            focalLength: 'No disponible',
-            timestamp: new Date().toISOString()
-        };
+    }, [isCameraActive, animatedOpacity]);
+
+// ----------------------------------------------------------------------
+// === 3. Capturar foto === 
+// ----------------------------------------------------------------------
+   const takePhoto = async () => {
+        if (!cameraRef.current) { Alert.alert('Error', 'Cámara no inicializada.'); return; }
+        let tempMetadata = { location: { latitude: 'No disponible', longitude: 'No disponible' }, focalLength: 'No disponible', timestamp: new Date().toISOString() };
 
         try {
-            if (locationStatus === 'granted') {
-                const locationData = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, timeout: 5000 });
-                tempMetadata.location = {
-                    latitude: locationData.coords.latitude,
-                    longitude: locationData.coords.longitude,
-                };
+            if (locationStatus === 'granted') { 
+                let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, timeout: 5000 });
+                tempMetadata.location = { latitude: location.coords.latitude, longitude: location.coords.longitude, };
             } 
+                       
+            const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, skipProcessing: true, exif: true, base64: false }); 
 
-            const photo = await cameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: true, exif: true, });
+            if (photo.exif && photo.exif.FocalLength) { tempMetadata.focalLength = photo.exif.FocalLength.toString(); }
             
-            if (photo.exif && photo.exif.FocalLength) {
-                tempMetadata.focalLength = photo.exif.FocalLength.toFixed(2);
+            if (photo.uri) {
+                setPhotoUri(photo.uri); 
+                setIsCameraActive(false); 
+                setMetadata(tempMetadata);
+            } else {
+                Alert.alert('Error', 'No se pudo obtener la URI de la foto.');
             }
-            
-            setPhotoUri(photo.uri);
-            setIsCameraActive(false);
-            setMetadata(tempMetadata);
 
         } catch (error) {
-            console.error("Error en takePhoto:", error);
+            console.error("Fallo al disparar la cámara:", error);
             Alert.alert('Error', 'No se pudo tomar la foto.');
         }
     };
-
 // ----------------------------------------------------------------------
-// 5. VISTAS Y RENDERIZADO
+// === 4. Renderizado ===
 // ----------------------------------------------------------------------
     
-    // VISTA PREVIA (MODIFICADA PARA LA PREGUNTA DE SARGAZO)
-    if (photoUri) {
-        // ... (Renderizado de la vista previa con los botones de sargazo)
-        const isReadyToCapture = isLeveled && isTilted && isQrDetected;
+    if (cameraPermission === null || locationStatus === null || !cameraPermission?.granted) {
         return (
-            <View style={styles.previewContainer}>
-                {isUploading && (
-                    <View style={styles.loadingOverlay}>
-                        <ActivityIndicator size="large" color="#fff" />
-                        <Text style={styles.loadingText}>Guardando en la nube...</Text>
-                    </View>
+            <View style={[styles.container, { justifyContent: 'center' }]}>
+                <ActivityIndicator size="large" color="#435161ff" />
+                <Text style={styles.permissionText}>Solicitando permisos...</Text>
+                
+                {!cameraPermission?.granted && (
+                    <TouchableOpacity onPress={requestCameraPermission} style={styles.requestButton}>
+                         <Text style={styles.requestButtonText}>Reintentar permiso de cámara</Text>
+                    </TouchableOpacity>
                 )}
-
-                <Image source={{ uri: photoUri }} style={styles.preview} />
-                
-                {/* PREGUNTA DE SARGAZO */}
-                <View style={styles.sargassumQuestionBox}>
-                    <Text style={styles.metadataTextTitle}>¿Cuánto sargazo hay?</Text>
-                    
-                    {/* Cuadrícula 2x2 para las 4 opciones */}
-                    <View style={styles.sargassumButtonsGrid}>
-                        <TouchableOpacity style={[styles.sargassumButton, {backgroundColor: '#5cb85c'}]} onPress={() => handleSaveAndUpload('Nada')} disabled={isUploading}>
-                           <Text style={styles.sargassumButtonText}>Nada</Text>
-                        </TouchableOpacity>
-                        
-                        <TouchableOpacity style={[styles.sargassumButton, {backgroundColor: '#f0ad4e'}]} onPress={() => handleSaveAndUpload('Poco')} disabled={isUploading}>
-                           <Text style={styles.sargassumButtonText}>Poco</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={[styles.sargassumButton, {backgroundColor: '#d9534f'}]} onPress={() => handleSaveAndUpload('Mas o menos')} disabled={isUploading}>
-                           <Text style={styles.sargassumButtonText}>M/M</Text>
-                        </TouchableOpacity>
-                        
-                        <TouchableOpacity style={[styles.sargassumButton, {backgroundColor: '#8B0000'}]} onPress={() => handleSaveAndUpload('Mucho')} disabled={isUploading}>
-                           <Text style={styles.sargassumButtonText}>Mucho</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-                
-                {/* Botón Descartar */}
-                <TouchableOpacity style={styles.discardButton} onPress={resetCameraView} disabled={isUploading}>
-                   <Text style={{color: '#fff', textAlign: 'center'}}>Descartar Foto</Text>
-                </TouchableOpacity>
             </View>
         );
     }
     
-    // VISTA DE PERMISOS
-    if (!cameraPermission?.granted || !mediaPermission?.granted || locationStatus !== 'granted') {
+   
+    if (photoUri) {
         return (
-            <View style={styles.container}>
-                <Text style={styles.textCenter}>
-                    Se requieren permisos de cámara, almacenamiento y ubicación para usar la app.
-                </Text>
-            </View>
+            <SargassumQuestion
+                photoUri={photoUri} 
+                metadata={metadata}
+                resetCameraView={resetCameraView}
+                isQrDetected={isQrDetected}
+            />
         );
     }
 
-// ----------------------------------------------------------------------
-// 6. VISTA DE CÁMARA (RENDERIZADO PRINCIPAL)
-// ----------------------------------------------------------------------
-    
+    // -----------------------------------------------
+    // === Vista de cámara activa ===
+    //------------------------------------------------ 
+    const currentScreenWidth = Dimensions.get('window').width; 
     const lineRotationDeg = animatedRoll.interpolate({ inputRange: [-90, 90], outputRange: ['-90deg', '90deg'], extrapolate: 'clamp', });
-    const baseRotation = orientation === 'LANDSCAPE' ? '90deg' : '0deg'; 
     const PITCH_TRANSLATION_MAX_X = currentScreenWidth * 0.4; 
     const pitchTranslationX = animatedPitch.interpolate({ inputRange: [-90, 90], outputRange: [-PITCH_TRANSLATION_MAX_X, PITCH_TRANSLATION_MAX_X], extrapolate: 'clamp', });
-    const isReadyToCapture = isLeveled && isTilted && isQrDetected;
-    const pitchRotationStyle = orientation === 'LANDSCAPE' ? { transform: [{ rotate: '90deg' }] } : {};
-
+    
+    const isReadyToCapture = cameraPermission?.granted; 
+    
     return (
-        <View style={styles.container}>
-            <CameraView
+        <View style={styles.container} key={cameraKey}>
+            <CameraView 
                 style={StyleSheet.absoluteFill}
-                ref={cameraRef}
                 facing="back"
-                active={isCameraActive}
-                ratio={'16:9'} 
-                onBarcodeScanned={isCameraActive ? handleBarcodeScanned : undefined} 
-                barcodeScannerSettings={{ barcodeTypes: ["qr"], }}
+                ref={cameraRef}
+                onBarcodeScanned={isCameraActive ? handleBarcodeScanned : undefined}
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                onCameraReady={() => setIsCameraReady(true)}
             />
 
-            {/* BOTÓN DE REGRESO */}
             <TouchableOpacity onPress={goToMainScreen} style={styles.backButton}>
                 <Text style={styles.backButtonText}>← Volver</Text>
             </TouchableOpacity>
 
-            {/* INDICADOR DE PITCH */}
-            <View style={[styles.pitchIndicatorContainer, pitchRotationStyle]}>
-                <Animated.View style={[styles.pitchMarkerFixed, { opacity: animatedPitchOpacity, backgroundColor: isTilted ? '#00FF00' : '#FF8C00', transform: [{ translateX: pitchTranslationX }] } ]} >
-                    <Text style={styles.pitchTextSimple}>
-                         {pitchDeviation < -5 ? '▼ Inclinar más' : (pitchDeviation > 5 ? '▲ Inclinar menos' : '70° OK')}
-                    </Text>
+            <View style={styles.pitchIndicatorContainer}>
+                <Animated.View style={[{ transform: [{ translateX: pitchTranslationX }], opacity: animatedPitchOpacity }, styles.pitchMarkerFixed, { backgroundColor: isTilted ? '#007bff' : 'rgba(255, 255, 255, 0.2)' }]}>
+                    <Text style={styles.pitchTextSimple}>{isTilted ? '¡Ángulo correcto!' : 'Ajustar ángulo'}</Text>
                 </Animated.View>
             </View>
 
-            {/* Cuadro guía */}
-            <View style={styles.frameContainer}> 
-                <View style={[styles.frameBase, { width: orientation === 'LANDSCAPE' ? `${FRAME_HEIGHT_PERCENT * 100}%` : `${FRAME_WIDTH_PERCENT * 100}%`, height: orientation === 'LANDSCAPE' ? `${FRAME_WIDTH_PERCENT * 100}%` : `${FRAME_HEIGHT_PERCENT * 100}%`, borderColor: isQrDetected ? '#00FFFF' : '#00FF00', opacity: isQrDetected ? 1.0 : 0.7 } ]} />
+            <View style={styles.frameContainer}>
+                <View style={[styles.frameBase, { borderColor: isQrDetected ? '#0f0' : 'rgba(255, 255, 255, 0.4)', width: FRAME_SIZE_PX, height: FRAME_SIZE_PX }]} />
             </View>
 
-            {/* Línea de nivelación (ROLL) */}
             <View style={styles.levelLineContainer}>
                 <Animated.View
-                    style={[styles.levelLine, { height: 2, opacity: animatedOpacity, transform: [ { rotate: lineRotationDeg }, { rotate: baseRotation } ], width: '80%', backgroundColor: isReadyToCapture ? '#0f0' : (isLeveled && isTilted ? '#FF8C00' : '#f00'), }]}
+                    style={[
+                        styles.levelLine, 
+                        { 
+                            opacity: animatedOpacity, 
+                            transform: [ { rotate: lineRotationDeg } ],
+                            width: '80%', 
+                            backgroundColor: isLeveled ? '#0f0' : '#f00' 
+                        }
+                    ]}
                 />
             </View>
 
-            {/* Botón de captura */}
             <View style={styles.buttonContainer}>
-                <TouchableOpacity
-                    style={[styles.captureButton, { backgroundColor: isReadyToCapture ? '#0f0' : '#fff', opacity: cameraRef.current ? 0.9 : 0.4 }]}
-                    onPress={takePhoto}
-                    disabled={!isReadyToCapture} 
-                />
+                <TouchableOpacity onPress={takePhoto} disabled={!isReadyToCapture || !isTilted || !isLeveled} style={[styles.captureButton, { borderColor: (isReadyToCapture && isTilted && isLeveled) ? '#0f0' : 'gray' }]}/>
             </View>
         </View>
     );
 }
 
-// -------------------------------
-// ESTILOS (Sin cambios en valores)
-// -------------------------------
+
+// ----------------------------------
+// === Estilos === 
+// ----------------------------------
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: 'black' },
-    textCenter: { color: '#fff', textAlign: 'center', fontSize: 18, marginTop: 50 },
-    backButton: {
-        position: 'absolute', top: 50, left: 20, zIndex: 10, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.5)', borderRadius: 5,
-    },
-    backButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-    frameContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 1 },
-    frameBase: {
-        borderWidth: 2, borderRadius: 10, opacity: 0.7,
-    },
-    levelLineContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 2 },
-    levelLine: { borderRadius: 3,},
-    buttonContainer: { position: 'absolute', bottom: 40, alignSelf: 'center', zIndex: 3 },
-    captureButton: { width: 80, height: 80, borderRadius: 40, borderWidth: 4, borderColor: '#ccc', opacity: 0.9 },
-    
-    pitchIndicatorContainer: {
-        position: 'absolute', top: 10, left: 0, right: 0, height: 50, justifyContent: 'center', alignItems: 'center', paddingTop: 10, zIndex: 4,
-    },
-    pitchMarkerFixed: {
-        alignItems: 'center', justifyContent: 'center', paddingVertical: 5, paddingHorizontal: 15, borderRadius: 5,
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    },
-    pitchTextSimple: {
-        color: '#fff', fontSize: 14, fontWeight: 'bold', textAlign: 'center',
-    },
-    
-    // Estilos de Preview y Sargazo
-    previewContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', },
-    preview: { width: '90%', height: '40%', borderRadius: 10, marginBottom: 15, },
-    sargassumQuestionBox: { backgroundColor: 'rgba(255, 255, 255, 0.1)', padding: 15, borderRadius: 8, width: '90%', marginBottom: 15, },
-    sargassumButtonsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 15, },
-    sargassumButton: { width: '48%', paddingVertical: 15, borderRadius: 8, alignItems: 'center', marginBottom: 10, },
-    sargassumButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold', },
-    discardButton: { backgroundColor: '#dc3545', padding: 15, borderRadius: 8, width: '90%', alignItems: 'center', },
-    metadataTextTitle: { color: '#fff', fontWeight: 'bold', fontSize: 18, marginBottom: 5, textAlign: 'center', },
-    loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', zIndex: 99, },
-    loadingText: { color: '#fff', marginTop: 10, fontSize: 16, },
+    backButton: { position: 'absolute', top: 40, left: 20, zIndex: 10, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.5)', borderRadius: 5, },
+    backButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+    permissionText: { color: 'white', fontSize: 18, textAlign: 'center', marginVertical: 10 },
+    requestButton: { backgroundColor: '#495e75ff', padding: 15, borderRadius: 8, marginVertical: 10 },
+    requestButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+    pitchIndicatorContainer: { position: 'absolute', top: 50, width: '100%', alignItems: 'center', zIndex: 10, },
+    pitchMarkerFixed: { position: 'absolute', width: 150, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255, 255, 255, 0.2)', },
+    pitchTextSimple: { color: 'white', fontWeight: 'bold', fontSize: 14, textAlign: 'center', },
+    levelLineContainer: { position: 'absolute', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', top: 0, left: 0, zIndex: 5, },
+    levelLine: { position: 'absolute', height: 6, backgroundColor: 'red', },
+    frameContainer: { position: 'absolute', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', zIndex: 5, },
+    frameBase: { borderWidth: 5, borderRadius: 10, },
+    buttonContainer: { position: 'absolute', bottom: 40, width: '100%', alignItems: 'center', zIndex: 10, },
+    captureButton: { width: 70, height: 70, borderRadius: 35, borderWidth: 5, borderColor: 'gray', backgroundColor: 'rgba(255, 255, 255, 0.5)' },
 });
