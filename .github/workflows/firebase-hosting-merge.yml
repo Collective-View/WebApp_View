@@ -11,10 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
      - uses: actions/checkout@v4
-  
-     - run: npm install -g expo-cli 
- 
-     - run: npm run web-build
+     - run: npm ci
+     - run: npx expo export --platform web
      - uses: FirebaseExtended/action-hosting-deploy@v0
        with:
         repoToken: ${{ secrets.GITHUB_TOKEN }}
